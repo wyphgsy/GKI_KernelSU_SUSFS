@@ -190,18 +190,30 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
     def init_and_sync_kernel(self):
         logger.info("=== 初始化和同步内核源代码 ===")
         self._chdir(self.work_dir)
-        formatted_branch = self.config.formatted_branch
+        av_kv = f"{self.config.android_version}-{self.config.kernel_version}"
+        formatted_branch = self.config.formatted_branch  # 如 android13-5.10-2025-02 (月度分支)
+        manifest_branch = f"common-{formatted_branch}"
+
+        # kernel/manifest 并非所有组合都有月度分支(如 android13-5.10 只有滚动 LTS 分支,
+        # 月度分支止于 2022-11)。月度分支不存在时自动回退到滚动分支 common-<av>-<kv>。
+        probe = subprocess.run(
+            f"git ls-remote --heads https://android.googlesource.com/kernel/manifest {manifest_branch}",
+            shell=True, capture_output=True, text=True).stdout.strip()
+        if not probe:
+            manifest_branch = f"common-{av_kv}"
+            logger.info(f"manifest 无月度分支 {formatted_branch}，改用滚动 LTS 分支 {manifest_branch}")
 
         self._run_cmd(f"$REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest "
-                     f"-b common-{formatted_branch}", check=False)
+                     f"-b {manifest_branch}", check=False)
 
-        remote = subprocess.run(f"git ls-remote https://android.googlesource.com/kernel/common {formatted_branch}",
+        common_branch = manifest_branch[len("common-"):]  # manifest 内 project 引用的 revision
+        remote = subprocess.run(f"git ls-remote https://android.googlesource.com/kernel/common {common_branch}",
                                shell=True, capture_output=True, text=True).stdout.strip()
         if "deprecated" in remote:
             manifest_path = self.work_dir / ".repo/manifests/default.xml"
             with open(manifest_path, "r") as f:
                 content = f.read()
-            content = content.replace(f'"{formatted_branch}"', f'"deprecated/{formatted_branch}"')
+            content = content.replace(f'"{common_branch}"', f'"deprecated/{common_branch}"')
             with open(manifest_path, "w") as f:
                 f.write(content)
 
