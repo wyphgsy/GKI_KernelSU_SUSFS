@@ -269,6 +269,22 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 self._chdir(ksu_dir)
                 self._run_cmd(f"git checkout {self.config.kernelsu_commit}", check=False)
                 self._chdir(self.work_dir)
+        self._fix_sukisu_kernel_umount()
+
+    def _fix_sukisu_kernel_umount(self):
+        """SukiSU builtin 分支 kernel/feature/kernel_umount.c 上游缺 kernel_umount_feature_set 定义
+        (仅剩 get, handler 却引用 set → 编译报 undeclared identifier)。检测到缺失时用 main 分支
+        的完整版本覆盖(同路径同 include 结构，安全)。"""
+        target = self.work_dir / "KernelSU" / "kernel" / "feature" / "kernel_umount.c"
+        if not target.exists():
+            return
+        content = target.read_text(errors="ignore")
+        if "static int kernel_umount_feature_set(u64 value)" in content:
+            return  # 定义完整，无需修复
+        logger.info("SukiSU kernel_umount.c 缺 kernel_umount_feature_set，覆盖为 main 分支完整版")
+        self._run_cmd("curl -sL "
+                     "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/feature/kernel_umount.c "
+                     f"-o {target}", check=False)
 
     def add_bbg(self):
         if not self.config.use_bbg:
