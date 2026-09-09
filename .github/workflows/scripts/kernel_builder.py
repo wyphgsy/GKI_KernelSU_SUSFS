@@ -272,19 +272,31 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         self._fix_sukisu_kernel_umount()
 
     def _fix_sukisu_kernel_umount(self):
-        """SukiSU builtin 分支 kernel/feature/kernel_umount.c 上游缺 kernel_umount_feature_set 定义
-        (仅剩 get, handler 却引用 set → 编译报 undeclared identifier)。检测到缺失时用 main 分支
-        的完整版本覆盖(同路径同 include 结构，安全)。"""
+        """SukiSU builtin 分支 kernel/feature/kernel_umount.c 上游 bug：只定义了
+        kernel_umount_feature_get，handler 却仍引用 kernel_umount_feature_set →
+        编译报 undeclared identifier。检测到缺失时在其 handler 结构前补插 set 实现。
+        (不能用 main 分支整文件覆盖：builtin 树结构不同，main 版会缺 runtime/ksud_boot.h)"""
         target = self.work_dir / "KernelSU" / "kernel" / "feature" / "kernel_umount.c"
         if not target.exists():
             return
         content = target.read_text(errors="ignore")
         if "static int kernel_umount_feature_set(u64 value)" in content:
-            return  # 定义完整，无需修复
-        logger.info("SukiSU kernel_umount.c 缺 kernel_umount_feature_set，覆盖为 main 分支完整版")
-        self._run_cmd("curl -sL "
-                     "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/feature/kernel_umount.c "
-                     f"-o {target}", check=False)
+            return  # 已有完整定义
+        if "kernel_umount_feature_set" not in content:
+            return  # 未引用 set，无需处理
+        anchor = "static const struct ksu_feature_handler kernel_umount_handler = {"
+        set_fn = ("static int kernel_umount_feature_set(u64 value)\n"
+                  "{\n"
+                  "    bool enable = value != 0;\n"
+                  "    ksu_kernel_umount_enabled = enable;\n"
+                  "    pr_info(\"kernel_umount: set to %d\\n\", enable);\n"
+                  "    return 0;\n"
+                  "}\n\n")
+        if anchor in content:
+            target.write_text(content.replace(anchor, set_fn + anchor, 1))
+            logger.info("SukiSU kernel_umount.c 已补插 kernel_umount_feature_set 实现")
+        else:
+            logger.warning("kernel_umount.c 未找到 handler 锚点，跳过修复")
 
     def add_bbg(self):
         if not self.config.use_bbg:
